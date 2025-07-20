@@ -8,9 +8,10 @@ import rasterio
 import io
 import shutil
 
-# Directory to save processed reports (server-side)
 processed_reports_dir = "processed_reports"
+saved_reports_dir = "saved_reports"
 os.makedirs(processed_reports_dir, exist_ok=True)
+os.makedirs(saved_reports_dir, exist_ok=True)
 
 def generate_pdf_report(folder_path):
     meta_path = os.path.join(folder_path, "metadata.txt")
@@ -39,18 +40,15 @@ def generate_pdf_report(folder_path):
     with PdfPages(pdf_buffer) as pdf:
         fig, axs = plt.subplots(2, 2, figsize=(11.69, 8.27))  # A4 landscape
 
-        # NDVI Map Preview
         ax_map = axs[0, 0]
         ax_map.imshow(img)
         ax_map.set_title("NDVI Map Preview")
         ax_map.axis("off")
 
-        # Metadata text
         ax_meta = axs[0, 1]
         ax_meta.axis("off")
         ax_meta.text(0, 1, metadata_text, verticalalignment="top", fontsize=10)
 
-        # Histogram
         ax_hist = axs[1, 0]
         if arr is not None:
             valid_arr = arr[~np.isnan(arr)]
@@ -68,7 +66,6 @@ def generate_pdf_report(folder_path):
         else:
             ax_hist.text(0.5, 0.5, "Histogram data not found", ha='center', va='center')
 
-        # Blank subplot bottom right
         axs[1, 1].axis("off")
 
         plt.tight_layout()
@@ -78,11 +75,10 @@ def generate_pdf_report(folder_path):
     pdf_buffer.seek(0)
     return pdf_buffer
 
-def process_ndvi_raster(tif_file, folder_name):
-    folder_path = os.path.join(processed_reports_dir, folder_name)
+def process_ndvi_raster(tif_file, folder_name, base_dir):
+    folder_path = os.path.join(base_dir, folder_name)
     os.makedirs(folder_path, exist_ok=True)
 
-    # Save uploaded tif inside folder
     uploaded_tif_path = os.path.join(folder_path, folder_name + ".tif")
     with open(uploaded_tif_path, "wb") as out_file:
         out_file.write(tif_file.read())
@@ -105,7 +101,6 @@ def process_ndvi_raster(tif_file, folder_name):
     min_val = np.nanmin(valid_arr)
     max_val = np.nanmax(valid_arr)
 
-    # Save preview PNG
     plt.figure(figsize=(6,6))
     plt.imshow(arr, cmap='RdYlGn')
     plt.title("NDVI Map Preview")
@@ -114,7 +109,6 @@ def process_ndvi_raster(tif_file, folder_name):
     plt.savefig(preview_path)
     plt.close()
 
-    # Save metadata
     metadata_text = (
         f"Projection: {spatial_ref}\n"
         f"Extent (xmin, ymin, xmax, ymax): {extent.left:.2f}, {extent.bottom:.2f}, "
@@ -132,7 +126,7 @@ def process_ndvi_raster(tif_file, folder_name):
 
 st.title("🌱 NDVI PDF Report Generator (Web)")
 
-tab1, tab2 = st.tabs(["Process New NDVI", "Previously Processed"])
+tab1, tab2, tab3 = st.tabs(["Process New NDVI", "Previously Processed", "Saved Data"])
 
 with tab1:
     uploaded_file = st.file_uploader("Upload NDVI GeoTIFF", type=["tif", "tiff"], accept_multiple_files=False)
@@ -142,7 +136,7 @@ with tab1:
         folder_name = f"{clean_name}_{timestamp}"
 
         with st.spinner("Processing NDVI raster..."):
-            folder_path = process_ndvi_raster(uploaded_file, folder_name)
+            folder_path = process_ndvi_raster(uploaded_file, folder_name, processed_reports_dir)
         st.success(f"Processed: {folder_name}")
 
         preview_img_path = os.path.join(folder_path, "preview.png")
@@ -159,6 +153,15 @@ with tab1:
             mime="application/pdf",
             key=f"download_{folder_name}"
         )
+
+        # Ask to save
+        save_confirm = st.checkbox("Save this processed data to Saved Data tab?")
+        if save_confirm:
+            dest_path = os.path.join(saved_reports_dir, folder_name)
+            if not os.path.exists(dest_path):
+                shutil.move(folder_path, dest_path)
+                st.success(f"Saved dataset as: {folder_name}")
+                st.experimental_rerun()
 
 with tab2:
     all_processed = sorted([f for f in os.listdir(processed_reports_dir) if os.path.isdir(os.path.join(processed_reports_dir, f))], reverse=True)
@@ -186,4 +189,32 @@ with tab2:
             file_name=f"{selected_folder}_report.pdf",
             mime="application/pdf",
             key=f"download_{selected_folder}"
+        )
+
+with tab3:
+    all_saved = sorted([f for f in os.listdir(saved_reports_dir) if os.path.isdir(os.path.join(saved_reports_dir, f))], reverse=True)
+    if not all_saved:
+        st.info("No saved NDVI reports found.")
+    else:
+        selected_folder = st.selectbox("Select a saved dataset to view", all_saved, key="saved_select")
+        folder_path = os.path.join(saved_reports_dir, selected_folder)
+
+        if st.button("Delete Selected Saved Dataset"):
+            shutil.rmtree(folder_path)
+            st.success(f"Deleted saved dataset: {selected_folder}")
+            st.experimental_rerun()
+
+        preview_img_path = os.path.join(folder_path, "preview.png")
+        st.image(preview_img_path, caption="NDVI Map Preview")
+
+        with open(os.path.join(folder_path, "metadata.txt"), "r") as f:
+            st.text_area("NDVI Metadata", f.read(), height=200)
+
+        pdf_buffer = generate_pdf_report(folder_path)
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_buffer,
+            file_name=f"{selected_folder}_report.pdf",
+            mime="application/pdf",
+            key=f"download_saved_{selected_folder}"
         )
