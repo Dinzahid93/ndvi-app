@@ -1,0 +1,9 @@
+streamlit
+rasterio
+numpy
+matplotlib
+Pillow
+pyproj
+shapely
+fiona
+reportlab
