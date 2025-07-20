@@ -39,7 +39,7 @@ def generate_pdf_report(folder_path):
     with PdfPages(pdf_buffer) as pdf:
         fig, axs = plt.subplots(2, 2, figsize=(11.69, 8.27))  # A4 landscape
 
-        # NDVI Map Preview (colored PNG)
+        # NDVI Map Preview
         ax_map = axs[0, 0]
         ax_map.imshow(img)
         ax_map.set_title("NDVI Map Preview")
@@ -50,7 +50,7 @@ def generate_pdf_report(folder_path):
         ax_meta.axis("off")
         ax_meta.text(0, 1, metadata_text, verticalalignment="top", fontsize=10)
 
-        # Histogram of NDVI values
+        # Histogram
         ax_hist = axs[1, 0]
         if arr is not None:
             valid_arr = arr[~np.isnan(arr)]
@@ -82,7 +82,6 @@ def process_ndvi_raster(tif_file, folder_name):
     folder_path = os.path.join(processed_reports_dir, folder_name)
     os.makedirs(folder_path, exist_ok=True)
 
-    # Save uploaded tif inside folder
     uploaded_tif_path = os.path.join(folder_path, folder_name + ".tif")
     with open(uploaded_tif_path, "wb") as out_file:
         out_file.write(tif_file.read())
@@ -105,7 +104,6 @@ def process_ndvi_raster(tif_file, folder_name):
     min_val = np.nanmin(valid_arr)
     max_val = np.nanmax(valid_arr)
 
-    # Save preview PNG with colormap
     plt.figure(figsize=(6,6))
     plt.imshow(arr, cmap='RdYlGn')
     plt.title("NDVI Map Preview")
@@ -114,7 +112,6 @@ def process_ndvi_raster(tif_file, folder_name):
     plt.savefig(preview_path)
     plt.close()
 
-    # Save metadata
     metadata_text = (
         f"Projection: {spatial_ref}\n"
         f"Extent (xmin, ymin, xmax, ymax): {extent.left:.2f}, {extent.bottom:.2f}, {extent.right:.2f}, {extent.top:.2f}\n"
@@ -131,53 +128,27 @@ def process_ndvi_raster(tif_file, folder_name):
 
 st.title("🌱 NDVI PDF Report Generator (Web)")
 
-tab1, tab2 = st.tabs(["Process New NDVI", "Previously Processed"])
+uploaded_file = st.file_uploader("Upload NDVI GeoTIFF", type=["tif", "tiff"], accept_multiple_files=False)
+if uploaded_file is not None:
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    clean_name = os.path.splitext(uploaded_file.name)[0].replace(" ", "_")
+    folder_name = f"{clean_name}_{timestamp}"
 
-with tab1:
-    uploaded_file = st.file_uploader("Upload NDVI GeoTIFF", type=["tif", "tiff"], accept_multiple_files=False)
-    if uploaded_file is not None:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        clean_name = os.path.splitext(uploaded_file.name)[0].replace(" ", "_")
-        folder_name = f"{clean_name}_{timestamp}"
+    with st.spinner("Processing NDVI raster..."):
+        folder_path = process_ndvi_raster(uploaded_file, folder_name)
+    st.success(f"Processed: {folder_name}")
 
-        with st.spinner("Processing NDVI raster..."):
-            folder_path = process_ndvi_raster(uploaded_file, folder_name)
-        st.success(f"Processed: {folder_name}")
+    preview_img_path = os.path.join(folder_path, "preview.png")
+    st.image(preview_img_path, caption="NDVI Map Preview")
 
-        preview_img_path = os.path.join(folder_path, "preview.png")
-        st.image(preview_img_path, caption="NDVI Map Preview")
+    with open(os.path.join(folder_path, "metadata.txt"), "r") as f:
+        st.text_area("NDVI Metadata", f.read(), height=200)
 
-        with open(os.path.join(folder_path, "metadata.txt"), "r") as f:
-            st.text_area("NDVI Metadata", f.read(), height=200)
-
-        pdf_buffer = generate_pdf_report(folder_path)
-        st.download_button(
-            label="Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"{folder_name}_report.pdf",
-            mime="application/pdf",
-            key=f"download_{folder_name}"
-        )
-
-with tab2:
-    all_processed = [f for f in os.listdir(processed_reports_dir) if os.path.isdir(os.path.join(processed_reports_dir, f))]
-    if not all_processed:
-        st.info("No previously processed NDVI reports found.")
-    else:
-        selected_folder = st.selectbox("Select a dataset to view", all_processed)
-        folder_path = os.path.join(processed_reports_dir, selected_folder)
-
-        preview_img_path = os.path.join(folder_path, "preview.png")
-        st.image(preview_img_path, caption="NDVI Map Preview")
-
-        with open(os.path.join(folder_path, "metadata.txt"), "r") as f:
-            st.text_area("NDVI Metadata", f.read(), height=200)
-
-        pdf_buffer = generate_pdf_report(folder_path)
-        st.download_button(
-            label="Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"{selected_folder}_report.pdf",
-            mime="application/pdf",
-            key=f"download_{selected_folder}"
-        )
+    pdf_buffer = generate_pdf_report(folder_path)
+    st.download_button(
+        label="Download PDF Report",
+        data=pdf_buffer,
+        file_name=f"{folder_name}_report.pdf",
+        mime="application/pdf",
+        key=f"download_{folder_name}"
+    )
