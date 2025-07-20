@@ -117,4 +117,73 @@ def process_ndvi_raster(tif_file, folder_name):
     # Save metadata
     metadata_text = (
         f"Projection: {spatial_ref}\n"
-        f"Extent (xmin
+        f"Extent (xmin, ymin, xmax, ymax): {extent.left:.2f}, {extent.bottom:.2f}, "
+        f"{extent.right:.2f}, {extent.top:.2f}\n"
+        f"Area: {area_m2:,.2f} m² ({area_ha:.2f} ha)\n"
+        f"Mean NDVI: {mean_val:.4f}\n"
+        f"Min NDVI: {min_val:.4f}\n"
+        f"Max NDVI: {max_val:.4f}\n"
+        f"Processed on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    with open(os.path.join(folder_path, "metadata.txt"), "w") as f:
+        f.write(metadata_text)
+
+    return folder_path
+
+st.title("🌱 NDVI PDF Report Generator (Web)")
+
+tab1, tab2 = st.tabs(["Process New NDVI", "Previously Processed"])
+
+with tab1:
+    uploaded_file = st.file_uploader("Upload NDVI GeoTIFF", type=["tif", "tiff"], accept_multiple_files=False)
+    if uploaded_file is not None:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        clean_name = os.path.splitext(uploaded_file.name)[0].replace(" ", "_")
+        folder_name = f"{clean_name}_{timestamp}"
+
+        with st.spinner("Processing NDVI raster..."):
+            folder_path = process_ndvi_raster(uploaded_file, folder_name)
+        st.success(f"Processed: {folder_name}")
+
+        preview_img_path = os.path.join(folder_path, "preview.png")
+        st.image(preview_img_path, caption="NDVI Map Preview")
+
+        with open(os.path.join(folder_path, "metadata.txt"), "r") as f:
+            st.text_area("NDVI Metadata", f.read(), height=200)
+
+        pdf_buffer = generate_pdf_report(folder_path)
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_buffer,
+            file_name=f"{folder_name}_report.pdf",
+            mime="application/pdf",
+            key=f"download_{folder_name}"
+        )
+
+with tab2:
+    all_processed = sorted([f for f in os.listdir(processed_reports_dir) if os.path.isdir(os.path.join(processed_reports_dir, f))], reverse=True)
+    if not all_processed:
+        st.info("No previously processed NDVI reports found.")
+    else:
+        selected_folder = st.selectbox("Select a dataset to view", all_processed)
+        folder_path = os.path.join(processed_reports_dir, selected_folder)
+
+        if st.button("Delete Selected Dataset"):
+            shutil.rmtree(folder_path)
+            st.success(f"Deleted: {selected_folder}")
+            st.experimental_rerun()
+
+        preview_img_path = os.path.join(folder_path, "preview.png")
+        st.image(preview_img_path, caption="NDVI Map Preview")
+
+        with open(os.path.join(folder_path, "metadata.txt"), "r") as f:
+            st.text_area("NDVI Metadata", f.read(), height=200)
+
+        pdf_buffer = generate_pdf_report(folder_path)
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_buffer,
+            file_name=f"{selected_folder}_report.pdf",
+            mime="application/pdf",
+            key=f"download_{selected_folder}"
+        )
