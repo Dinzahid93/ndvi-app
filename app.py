@@ -38,7 +38,7 @@ def generate_pdf_report(folder_path):
 
     pdf_buffer = io.BytesIO()
     with PdfPages(pdf_buffer) as pdf:
-        fig, axs = plt.subplots(2, 2, figsize=(11.69, 8.27))  # A4 landscape
+        fig, axs = plt.subplots(2, 2, figsize=(11.69, 8.27))
 
         ax_map = axs[0, 0]
         ax_map.imshow(img)
@@ -126,7 +126,7 @@ def process_ndvi_raster(tif_file, folder_name, base_dir):
 
 st.title("🌱 NDVI PDF Report Generator (Web)")
 
-tab1, tab2, tab3 = st.tabs(["Process New NDVI", "Previously Processed", "Saved Data"])
+tab1, tab2 = st.tabs(["Process New NDVI", "Saved Data"])
 
 with tab1:
     uploaded_file = st.file_uploader("Upload NDVI GeoTIFF", type=["tif", "tiff"], accept_multiple_files=False)
@@ -154,44 +154,15 @@ with tab1:
             key=f"download_{folder_name}"
         )
 
-        # Ask to save
         save_confirm = st.checkbox("Save this processed data to Saved Data tab?")
         if save_confirm:
             dest_path = os.path.join(saved_reports_dir, folder_name)
             if not os.path.exists(dest_path):
                 shutil.move(folder_path, dest_path)
                 st.success(f"Saved dataset as: {folder_name}")
-                st.experimental_rerun()
+                # Note: no st.experimental_rerun() here to avoid errors in cloud
 
 with tab2:
-    all_processed = sorted([f for f in os.listdir(processed_reports_dir) if os.path.isdir(os.path.join(processed_reports_dir, f))], reverse=True)
-    if not all_processed:
-        st.info("No previously processed NDVI reports found.")
-    else:
-        selected_folder = st.selectbox("Select a dataset to view", all_processed)
-        folder_path = os.path.join(processed_reports_dir, selected_folder)
-
-        if st.button("Delete Selected Dataset"):
-            shutil.rmtree(folder_path)
-            st.success(f"Deleted: {selected_folder}")
-            st.experimental_rerun()
-
-        preview_img_path = os.path.join(folder_path, "preview.png")
-        st.image(preview_img_path, caption="NDVI Map Preview")
-
-        with open(os.path.join(folder_path, "metadata.txt"), "r") as f:
-            st.text_area("NDVI Metadata", f.read(), height=200)
-
-        pdf_buffer = generate_pdf_report(folder_path)
-        st.download_button(
-            label="Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"{selected_folder}_report.pdf",
-            mime="application/pdf",
-            key=f"download_{selected_folder}"
-        )
-
-with tab3:
     all_saved = sorted([f for f in os.listdir(saved_reports_dir) if os.path.isdir(os.path.join(saved_reports_dir, f))], reverse=True)
     if not all_saved:
         st.info("No saved NDVI reports found.")
@@ -202,7 +173,7 @@ with tab3:
         if st.button("Delete Selected Saved Dataset"):
             shutil.rmtree(folder_path)
             st.success(f"Deleted saved dataset: {selected_folder}")
-            st.experimental_rerun()
+            # No rerun to avoid errors in cloud
 
         preview_img_path = os.path.join(folder_path, "preview.png")
         st.image(preview_img_path, caption="NDVI Map Preview")
