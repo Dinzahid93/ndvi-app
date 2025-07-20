@@ -2,106 +2,90 @@ import streamlit as st
 import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
 import os
-import datetime
-import base64
+from datetime import datetime
+from rasterio.plot import show
+from rasterio.transform import xy
+from pyproj import CRS
 
-# Setup
-st.set_page_config(page_title="NDVI Report Dashboard", layout="wide")
-st.sidebar.title("📤 Upload NDVI Raster")
-st.sidebar.write("Upload NDVI .tif file\n\nLimit 200MB per file • TIF, TIFF")
+# Setup a results folder
+RESULTS_DIR = "results"
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Global storage (in memory)
-if "ndvi_reports" not in st.session_state:
-    st.session_state["ndvi_reports"] = []
+st.set_page_config(page_title="NDVI Analyzer", layout="wide")
+st.title("🌱 NDVI Report Generator (Streamlit Version)")
 
-# File uploader
-uploaded_file = st.sidebar.file_uploader("Upload NDVI .tif file", type=["tif", "tiff"])
+# Upload a GeoTIFF
+uploaded_file = st.file_uploader("Upload your NDVI GeoTIFF file", type=["tif", "tiff"])
 
-if uploaded_file is not None:
+if uploaded_file:
     try:
-        # Read file into BytesIO buffer
+        # Read uploaded bytes
         tif_bytes = uploaded_file.read()
-        tif_stream = BytesIO(tif_bytes)
+        dataset = rasterio.open(BytesIO(tif_bytes))
 
-        with rasterio.open(tif_stream) as src:
-            ndvi = src.read(1)
-            ndvi = np.ma.masked_invalid(ndvi)
-            meta = src.meta
+        st.success("✅ File loaded successfully!")
 
-        # Compute NDVI stats
-        ndvi_mean = float(np.mean(ndvi))
-        ndvi_min = float(np.min(ndvi))
-        ndvi_max = float(np.max(ndvi))
-        ndvi_std = float(np.std(ndvi))
+        # Check number of bands
+        if dataset.count != 1:
+            st.warning("⚠️ This file has more than 1 band. Please upload a single-band NDVI GeoTIFF.")
+        else:
+            ndvi = dataset.read(1)
+            ndvi = np.where((ndvi < -1) | (ndvi > 1), np.nan, ndvi)
 
-        # Plot NDVI
-        fig, ax = plt.subplots()
-        cmap = plt.cm.YlGn
-        cax = ax.imshow(ndvi, cmap=cmap, vmin=-1, vmax=1)
-        fig.colorbar(cax, ax=ax, label="NDVI")
-        ax.set_title("NDVI Visualization")
-        ax.axis("off")
+            # Show NDVI preview
+            fig, ax = plt.subplots()
+            img = ax.imshow(ndvi, cmap='RdYlGn', vmin=-1, vmax=1)
+            ax.set_title("NDVI Preview")
+            fig.colorbar(img, ax=ax, shrink=0.6)
+            st.pyplot(fig)
 
-        # Save plot as image buffer
-        img_buf = BytesIO()
-        fig.savefig(img_buf, format="png", bbox_inches='tight')
-        plt.close(fig)
-        img_buf.seek(0)
+            # Extract metadata
+            bounds = dataset.bounds
+            crs = CRS.from_user_input(dataset.crs)
+            resolution = dataset.res
+            stats = {
+                "Min NDVI": np.nanmin(ndvi),
+                "Max NDVI": np.nanmax(ndvi),
+                "Mean NDVI": np.nanmean(ndvi),
+                "CRS": crs.to_string(),
+                "Resolution": f"{resolution[0]:.2f} x {resolution[1]:.2f} m",
+                "Bounds": bounds
+            }
 
-        # Generate PDF report
-        report_buf = BytesIO()
-        pdf = canvas.Canvas(report_buf, pagesize=letter)
-        pdf.setTitle("NDVI Report")
-        pdf.drawString(50, 750, f"NDVI Report")
-        pdf.drawString(50, 735, f"File: {uploaded_file.name}")
-        pdf.drawString(50, 720, f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        pdf.drawString(50, 695, f"Mean NDVI: {ndvi_mean:.3f}")
-        pdf.drawString(50, 680, f"Min NDVI: {ndvi_min:.3f}")
-        pdf.drawString(50, 665, f"Max NDVI: {ndvi_max:.3f}")
-        pdf.drawString(50, 650, f"Std Dev: {ndvi_std:.3f}")
-        pdf.showPage()
-        pdf.save()
-        report_buf.seek(0)
+            # Show metadata
+            st.subheader("📊 NDVI Statistics")
+            for key, value in stats.items():
+                st.write(f"**{key}:** {value}")
 
-        # Encode for download
-        report_b64 = base64.b64encode(report_buf.getvalue()).decode()
-        report_link = f'<a href="data:application/pdf;base64,{report_b64}" download="NDVI_Report_{uploaded_file.name}.pdf">📄 Download PDF Report</a>'
+            # Save NDVI PNG preview
+            png_buffer = BytesIO()
+            fig.savefig(png_buffer, format='png')
+            png_buffer.seek(0)
 
-        # Save session state
-        st.session_state["ndvi_reports"].append({
-            "filename": uploaded_file.name,
-            "mean": ndvi_mean,
-            "min": ndvi_min,
-            "max": ndvi_max,
-            "std": ndvi_std,
-            "plot": img_buf,
-            "pdf": report_link
-        })
+            # Generate PDF Report
+            pdf_path = os.path.join(RESULTS_DIR, f"{uploaded_file.name}_NDVI_Report.pdf")
+            c = canvas.Canvas(pdf_path, pagesize=letter)
+            c.drawString(100, 750, "NDVI Analysis Report")
+            c.drawString(100, 735, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            y = 700
+            for key, value in stats.items():
+                c.drawString(100, y, f"{key}: {value}")
+                y -= 15
+            c.drawImage(ImageReader(png_buffer), 100, 400, width=400, height=250)
+            c.save()
 
-        st.success(f"✅ Processed {uploaded_file.name}")
+            with open(pdf_path, "rb") as pdf_file:
+                st.download_button(
+                    label="📥 Download NDVI Report (PDF)",
+                    data=pdf_file,
+                    file_name=os.path.basename(pdf_path),
+                    mime="application/pdf"
+                )
+
     except Exception as e:
-        st.error(f"❌ Failed to process the file. Reason: {str(e)}")
-
-# MAIN UI
-st.markdown("## 🌿 NDVI Report Dashboard")
-st.markdown("### 🗂️ NDVI Report History")
-
-if len(st.session_state["ndvi_reports"]) == 0:
-    st.info("📂 No NDVI reports yet. Upload a .tif file to begin.")
-else:
-    for i, report in enumerate(reversed(st.session_state["ndvi_reports"])):
-        col1, col2 = st.columns([2, 3])
-        with col1:
-            st.image(report["plot"], caption=report["filename"], use_column_width=True)
-        with col2:
-            st.markdown(f"**🗂️ File:** `{report['filename']}`")
-            st.markdown(f"- **Mean NDVI:** `{report['mean']:.3f}`")
-            st.markdown(f"- **Min NDVI:** `{report['min']:.3f}`")
-            st.markdown(f"- **Max NDVI:** `{report['max']:.3f}`")
-            st.markdown(f"- **Std Dev:** `{report['std']:.3f}`")
-            st.markdown(report["pdf"], unsafe_allow_html=True)
+        st.error(f"❌ Error processing file: {e}")
