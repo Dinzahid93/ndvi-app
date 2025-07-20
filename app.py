@@ -2,160 +2,106 @@ import streamlit as st
 import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 from matplotlib.backends.backend_pdf import PdfPages
-import io
+from io import BytesIO
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 import os
-import json
 import datetime
-from PIL import Image
+import base64
 
-# -------------------- INITIAL SETUP --------------------
+# Setup
 st.set_page_config(page_title="NDVI Report Dashboard", layout="wide")
-st.title("🌿 NDVI Report Dashboard")
+st.sidebar.title("📤 Upload NDVI Raster")
+st.sidebar.write("Upload NDVI .tif file\n\nLimit 200MB per file • TIF, TIFF")
 
-# Make folders
-os.makedirs("results", exist_ok=True)
-os.makedirs("results/previews", exist_ok=True)
-os.makedirs("results/pdfs", exist_ok=True)
-records_path = "results/records.json"
+# Global storage (in memory)
+if "ndvi_reports" not in st.session_state:
+    st.session_state["ndvi_reports"] = []
 
-# Load existing record list
-if os.path.exists(records_path):
-    with open(records_path, "r") as f:
-        record_list = json.load(f)
-else:
-    record_list = []
-
-# -------------------- UPLOAD & PROCESSING --------------------
-st.sidebar.header("📤 Upload NDVI Raster")
+# File uploader
 uploaded_file = st.sidebar.file_uploader("Upload NDVI .tif file", type=["tif", "tiff"])
 
 if uploaded_file is not None:
     try:
-        # Read raster
-        with rasterio.open(uploaded_file) as src:
-            arr = src.read(1).astype("float32")
-            arr[arr == src.nodata] = np.nan
-            transform = src.transform
-            crs = src.crs.to_string()
-            extent = src.bounds
-            pixel_area = abs(transform[0] * transform[4])
+        # Read file into BytesIO buffer
+        tif_bytes = uploaded_file.read()
+        tif_stream = BytesIO(tif_bytes)
 
-        # Stats
-        valid_arr = arr[~np.isnan(arr)]
-        area_m2 = valid_arr.size * pixel_area
-        area_ha = area_m2 / 10000
-        mean_val = float(np.nanmean(valid_arr))
-        min_val = float(np.nanmin(valid_arr))
-        max_val = float(np.nanmax(valid_arr))
+        with rasterio.open(tif_stream) as src:
+            ndvi = src.read(1)
+            ndvi = np.ma.masked_invalid(ndvi)
+            meta = src.meta
 
-        # Normalize + apply colormap
-        ndvi_min, ndvi_max = -1.0, 1.0
-        norm_arr = (arr - ndvi_min) / (ndvi_max - ndvi_min)
-        norm_arr = np.clip(norm_arr, 0, 1)
-        colored_img = cm.RdYlGn(norm_arr)
+        # Compute NDVI stats
+        ndvi_mean = float(np.mean(ndvi))
+        ndvi_min = float(np.min(ndvi))
+        ndvi_max = float(np.max(ndvi))
+        ndvi_std = float(np.std(ndvi))
 
-        # Generate unique filenames
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = os.path.splitext(uploaded_file.name)[0]
-        preview_name = f"{base_name}_{timestamp}.png"
-        pdf_name = f"{base_name}_{timestamp}.pdf"
+        # Plot NDVI
+        fig, ax = plt.subplots()
+        cmap = plt.cm.YlGn
+        cax = ax.imshow(ndvi, cmap=cmap, vmin=-1, vmax=1)
+        fig.colorbar(cax, ax=ax, label="NDVI")
+        ax.set_title("NDVI Visualization")
+        ax.axis("off")
 
-        preview_path = os.path.join("results/previews", preview_name)
-        pdf_path = os.path.join("results/pdfs", pdf_name)
+        # Save plot as image buffer
+        img_buf = BytesIO()
+        fig.savefig(img_buf, format="png", bbox_inches='tight')
+        plt.close(fig)
+        img_buf.seek(0)
 
-        # Save preview image
-        plt.imsave(preview_path, colored_img)
+        # Generate PDF report
+        report_buf = BytesIO()
+        pdf = canvas.Canvas(report_buf, pagesize=letter)
+        pdf.setTitle("NDVI Report")
+        pdf.drawString(50, 750, f"NDVI Report")
+        pdf.drawString(50, 735, f"File: {uploaded_file.name}")
+        pdf.drawString(50, 720, f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        pdf.drawString(50, 695, f"Mean NDVI: {ndvi_mean:.3f}")
+        pdf.drawString(50, 680, f"Min NDVI: {ndvi_min:.3f}")
+        pdf.drawString(50, 665, f"Max NDVI: {ndvi_max:.3f}")
+        pdf.drawString(50, 650, f"Std Dev: {ndvi_std:.3f}")
+        pdf.showPage()
+        pdf.save()
+        report_buf.seek(0)
 
-        # Generate and save PDF report
-        with PdfPages(pdf_path) as pdf:
-            fig, axs = plt.subplots(2, 2, figsize=(11.69, 8.27))  # A4
+        # Encode for download
+        report_b64 = base64.b64encode(report_buf.getvalue()).decode()
+        report_link = f'<a href="data:application/pdf;base64,{report_b64}" download="NDVI_Report_{uploaded_file.name}.pdf">📄 Download PDF Report</a>'
 
-            axs[0, 0].imshow(colored_img)
-            axs[0, 0].set_title("NDVI Map Preview")
-            axs[0, 0].axis("off")
-
-            axs[0, 1].hist(valid_arr.flatten(), bins=30, color='green', alpha=0.7)
-            axs[0, 1].axvline(mean_val, color='blue', linestyle='--', label=f"Mean: {mean_val:.3f}")
-            axs[0, 1].axvline(min_val, color='red', linestyle=':', label=f"Min: {min_val:.3f}")
-            axs[0, 1].axvline(max_val, color='orange', linestyle=':', label=f"Max: {max_val:.3f}")
-            axs[0, 1].legend()
-            axs[0, 1].set_title("NDVI Histogram")
-
-            axs[1, 0].axis("off")
-            metadata = [
-                f"File: {uploaded_file.name}",
-                f"Projection: {crs}",
-                f"Extent (UTM):",
-                f"  Xmin: {extent.left:.2f}",
-                f"  Xmax: {extent.right:.2f}",
-                f"  Ymin: {extent.bottom:.2f}",
-                f"  Ymax: {extent.top:.2f}",
-                f"Area: {area_m2:,.2f} m² ({area_ha:.2f} ha)",
-                f"NDVI Mean: {mean_val:.3f}",
-                f"NDVI Min: {min_val:.3f}",
-                f"NDVI Max: {max_val:.3f}",
-                f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            ]
-            axs[1, 0].text(0, 1, "\n".join(metadata), fontsize=9, va='top')
-            axs[1, 1].axis("off")
-
-            plt.tight_layout()
-            pdf.savefig(fig)
-            plt.close()
-
-        # Save metadata
-        new_record = {
-            "id": len(record_list) + 1,
+        # Save session state
+        st.session_state["ndvi_reports"].append({
             "filename": uploaded_file.name,
-            "preview_path": preview_path,
-            "pdf_path": pdf_path,
-            "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "mean": mean_val,
-            "min": min_val,
-            "max": max_val,
-            "area_m2": area_m2,
-            "area_ha": area_ha,
-            "crs": crs,
-            "extent": {
-                "xmin": extent.left,
-                "xmax": extent.right,
-                "ymin": extent.bottom,
-                "ymax": extent.top
-            }
-        }
+            "mean": ndvi_mean,
+            "min": ndvi_min,
+            "max": ndvi_max,
+            "std": ndvi_std,
+            "plot": img_buf,
+            "pdf": report_link
+        })
 
-        record_list.append(new_record)
-        with open(records_path, "w") as f:
-            json.dump(record_list, f, indent=2)
-
-        st.success("✅ NDVI processed and saved successfully!")
-
+        st.success(f"✅ Processed {uploaded_file.name}")
     except Exception as e:
-        st.error(f"❌ Error processing file: {e}")
+        st.error(f"❌ Failed to process the file. Reason: {str(e)}")
 
-# -------------------- SHOW RESULTS --------------------
-st.subheader("📜 NDVI Report History")
+# MAIN UI
+st.markdown("## 🌿 NDVI Report Dashboard")
+st.markdown("### 🗂️ NDVI Report History")
 
-if record_list:
-    for record in reversed(record_list):
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.image(record["preview_path"], caption=record["filename"], width=220)
-        with col2:
-            st.markdown(f"**🕒 Date**: {record['timestamp']}")
-            st.markdown(f"**📐 Area**: {record['area_m2']:,.2f} m² ({record['area_ha']:.2f} ha)")
-            st.markdown(f"**📊 NDVI**: Mean={record['mean']:.3f}, Min={record['min']:.3f}, Max={record['max']:.3f}")
-            st.markdown(f"**🗺️ Projection**: {record['crs']}")
-            st.markdown(f"**📌 Extent**: Xmin={record['extent']['xmin']:.2f}, Xmax={record['extent']['xmax']:.2f}, "
-                        f"Ymin={record['extent']['ymin']:.2f}, Ymax={record['extent']['ymax']:.2f}")
-            with open(record["pdf_path"], "rb") as f:
-                st.download_button(
-                    label="📥 Download PDF Report",
-                    data=f,
-                    file_name=os.path.basename(record["pdf_path"]),
-                    mime="application/pdf"
-                )
-else:
+if len(st.session_state["ndvi_reports"]) == 0:
     st.info("📂 No NDVI reports yet. Upload a .tif file to begin.")
+else:
+    for i, report in enumerate(reversed(st.session_state["ndvi_reports"])):
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            st.image(report["plot"], caption=report["filename"], use_column_width=True)
+        with col2:
+            st.markdown(f"**🗂️ File:** `{report['filename']}`")
+            st.markdown(f"- **Mean NDVI:** `{report['mean']:.3f}`")
+            st.markdown(f"- **Min NDVI:** `{report['min']:.3f}`")
+            st.markdown(f"- **Max NDVI:** `{report['max']:.3f}`")
+            st.markdown(f"- **Std Dev:** `{report['std']:.3f}`")
+            st.markdown(report["pdf"], unsafe_allow_html=True)
