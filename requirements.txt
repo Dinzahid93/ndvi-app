@@ -2,8 +2,6 @@ streamlit
 rasterio
 numpy
 matplotlib
-Pillow
-pyproj
-shapely
-fiona
+pillow
 reportlab
+pyproj
